@@ -1,0 +1,77 @@
+services:
+  activation-api:
+    build:
+      context: .
+      dockerfile: apps/activation-api/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      KAFKA_BROKERS: kafka:19092
+      MONGO_URI: mongodb://mongo:27017/activation_api?replicaSet=rs0
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  billing-service:
+    build:
+      context: .
+      dockerfile: apps/billing-service/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:19092
+      MONGO_URI: mongodb://mongo:27017/billing?replicaSet=rs0
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  provisioning-service:
+    build:
+      context: .
+      dockerfile: apps/provisioning-service/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:19092
+      MONGO_URI: mongodb://mongo:27017/provisioning?replicaSet=rs0
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: apps/notification-service/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:19092
+      MONGO_URI: mongodb://mongo:27017/notification?replicaSet=rs0
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    restart: unless-stopped
+
+  crm-analytics-service:
+    build:
+      context: .
+      dockerfile: apps/crm-analytics-service/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:19092
+      MONGO_URI: mongodb://mongo:27017/crm?replicaSet=rs0
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped

@@ -1,0 +1,13 @@
+services:
+  kafka-init:
+    image: apache/kafka:3.9.1
+    entrypoint: ["/bin/sh", "/scripts/create-topics.sh"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVER: kafka:19092
+    volumes:
+      - ./docker/create-topics.sh:/scripts/create-topics.sh:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - default

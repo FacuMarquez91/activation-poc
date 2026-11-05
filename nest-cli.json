@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "apps/activation-api/src",
+  "monorepo": true,
+  "root": "apps/activation-api",
+  "compilerOptions": {
+    "webpack": false,
+    "tsConfigPath": "apps/activation-api/tsconfig.app.json"
+  },
+  "projects": {
+    "activation-api": {
+      "type": "application",
+      "root": "apps/activation-api",
+      "entryFile": "main",
+      "sourceRoot": "apps/activation-api/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/activation-api/tsconfig.app.json"
+      }
+    },
+    "billing-service": {
+      "type": "application",
+      "root": "apps/billing-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/billing-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/billing-service/tsconfig.app.json"
+      }
+    },
+    "provisioning-service": {
+      "type": "application",
+      "root": "apps/provisioning-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/provisioning-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/provisioning-service/tsconfig.app.json"
+      }
+    },
+    "notification-service": {
+      "type": "application",
+      "root": "apps/notification-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/notification-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/notification-service/tsconfig.app.json"
+      }
+    },
+    "crm-analytics-service": {
+      "type": "application",
+      "root": "apps/crm-analytics-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/crm-analytics-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/crm-analytics-service/tsconfig.app.json"
+      }
+    }
+  }
+}

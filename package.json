@@ -1,0 +1,37 @@
+{
+  "name": "activation-poc",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "start:activation": "nest start activation-api",
+    "start:billing": "nest start billing-service",
+    "start:provisioning": "nest start provisioning-service",
+    "start:notification": "nest start notification-service",
+    "start:crm": "nest start crm-analytics-service"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.15",
+    "@nestjs/core": "^10.4.15",
+    "@nestjs/microservices": "^10.4.15",
+    "@nestjs/platform-express": "^10.4.15",
+    "@nestjs/platform-socket.io": "^10.4.15",
+    "@nestjs/websockets": "^10.4.15",
+    "kafkajs": "^2.2.4",
+    "mongoose": "^8.9.5",
+    "nodemailer": "^6.10.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.0.5"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.4.9",
+    "@nestjs/schematics": "^10.2.3",
+    "@types/node": "^22.20.5",
+    "@types/nodemailer": "^6.4.24",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.7.3"
+  }
+}
