@@ -1,0 +1,19 @@
+:root {
+  font-family: Inter, system-ui, Arial, sans-serif;
+  color: #f1f5f9;
+  background: #0f1420;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+}

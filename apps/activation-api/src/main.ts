@@ -1,6 +1,7 @@
 
 import 'reflect-metadata';
 import { randomUUID } from 'crypto';
+import { ActivationGateway } from './activation.gateway';
 import {
   Body,
   Controller,
@@ -71,9 +72,10 @@ const Activation = mongoose.model(
 @Injectable()
 class ActivationService implements OnModuleInit {
   constructor(
-    @Inject('KAFKA_PRODUCER')
-    private readonly kafka: ClientKafka,
-  ) {}
+  @Inject('KAFKA_PRODUCER')
+  private readonly kafka: ClientKafka,
+  private readonly gateway: ActivationGateway,
+) {}
 
   async onModuleInit() {
     await this.kafka.connect();
@@ -318,12 +320,18 @@ class ActivationService implements OnModuleInit {
     );
 
     if (!updated) {
-      return;
-    }
+  return;
+}
 
-    console.log(
-      `Resultado recibido: ${event.eventType}`,
-    );
+// Enviar el nuevo estado al navegador.
+this.gateway.publishUpdate(
+  activationId,
+  updated.toObject(),
+);
+
+console.log(
+  `Resultado recibido: ${event.eventType}`,
+);
 
     const steps = updated.get('steps') as Record<
       string,
@@ -427,6 +435,17 @@ class ActivationService implements OnModuleInit {
       },
     );
 
+    // Recuperar el estado final y su historial completo.
+const finalActivation = await Activation.findById(
+  activationId,
+).lean();
+
+if (finalActivation) {
+  this.gateway.publishUpdate(
+    activationId,
+    finalActivation,
+  );
+}
     console.log(
       `Saga ${activationId}: ${finalStatus}`,
     );
@@ -533,12 +552,13 @@ class SagaController {
     ]),
   ],
   controllers: [
-    ActivationController,
-    SagaController,
-  ],
-  providers: [
-    ActivationService,
-  ],
+  ActivationController,
+  SagaController,
+],
+providers: [
+  ActivationService,
+  ActivationGateway,
+],
 })
 class AppModule {}
 
