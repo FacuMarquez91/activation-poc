@@ -25,6 +25,7 @@ import {
   ActivationRequestedEvent,
   EventEnvelope,
 } from '../../../libs/contracts/src';
+import { withRetry } from '../../../libs/kafka-toolkit/src';
 
 const provisioningSchema = new Schema(
   {
@@ -51,7 +52,7 @@ class ProvisioningService implements OnModuleInit {
   constructor(
     @Inject('KAFKA_PRODUCER')
     private readonly kafka: ClientKafka,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     await this.kafka.connect();
@@ -134,19 +135,73 @@ class ProvisioningService implements OnModuleInit {
       `Aprovisionamiento finalizado: ${activationId}`,
     );
   }
+  async publishToDlq(
+    event: ActivationRequestedEvent,
+    error: unknown,
+  ) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    const dlqMessage = {
+      originalEvent: event,
+      originalTopic: TOPICS.ACTIVATION_REQUESTED,
+      failedAt: new Date().toISOString(),
+      error: errorMessage,
+      failedService: 'provisioning-service',
+    };
+
+    await firstValueFrom(
+      this.kafka.emit(
+        TOPICS.ACTIVATION_REQUESTED_DLQ,
+        {
+          key: event.customerId,
+          value: dlqMessage,
+        },
+      ),
+    );
+
+    console.error(
+      `Evento enviado a DLQ: ${event.correlationId}`,
+    );
+  }
 }
 
 @Controller()
 class ProvisioningController {
   constructor(
     private readonly service: ProvisioningService,
-  ) {}
+  ) { }
 
   @EventPattern(TOPICS.ACTIVATION_REQUESTED)
   async handleActivation(
     @Payload() event: ActivationRequestedEvent,
   ) {
-    await this.service.processActivation(event);
+    try {
+      await withRetry(
+        () => this.service.processActivation(event),
+        {
+          onRetry: (error, retryNumber, delayMs) => {
+            console.warn(
+              `Provisioning: reintento ${retryNumber}/3 ` +
+              `en ${delayMs} ms`,
+              error,
+            );
+          },
+        },
+      );
+    } catch (error) {
+      console.error(
+        `Provisioning: reintentos agotados para ` +
+        `${event.correlationId}`,
+        error,
+      );
+
+      // Si falla la publicación en DLQ,
+      // dejamos que el error se propague.
+      await this.service.publishToDlq(event, error);
+    }
   }
 }
 
@@ -174,7 +229,7 @@ class ProvisioningController {
   controllers: [ProvisioningController],
   providers: [ProvisioningService],
 })
-class ProvisioningModule {}
+class ProvisioningModule { }
 
 async function bootstrap() {
   const mongoUri =

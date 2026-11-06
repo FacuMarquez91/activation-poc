@@ -1,4 +1,3 @@
-
 import 'reflect-metadata';
 import { randomUUID } from 'crypto';
 import {
@@ -26,6 +25,7 @@ import {
   ActivationRequestedEvent,
   EventEnvelope,
 } from '../../../libs/contracts/src';
+import { withRetry } from '../../../libs/kafka-toolkit/src';
 
 // MODELO DE CUENTA DE FACTURACION
 
@@ -46,10 +46,7 @@ const billingSchema = new Schema(
   { timestamps: true, versionKey: false },
 );
 
-const BillingAccount = mongoose.model(
-  'BillingAccount',
-  billingSchema,
-);
+const BillingAccount = mongoose.model('BillingAccount', billingSchema);
 
 // SERVICIO DE FACTURACION
 
@@ -66,34 +63,25 @@ class BillingService implements OnModuleInit {
 
   // PROCESAR SOLICITUD DE ACTIVACION
 
-  async processActivation(
-    event: ActivationRequestedEvent,
-  ) {
-    if (
-      event?.eventType !==
-      EVENT_TYPES.ACTIVATION_REQUESTED
-    ) {
+  async processActivation(event: ActivationRequestedEvent) {
+    if (event?.eventType !== EVENT_TYPES.ACTIVATION_REQUESTED) {
       return;
     }
 
     const activationId = event.correlationId;
 
-    console.log(
-      `Procesando facturacion: ${activationId}`,
-    );
+    console.log(`Procesando facturacion: ${activationId}`);
 
-    // Fallo de negocio simulado.
+    // Fallo de negocio simulado: no es un error tecnico ni va a DLQ.
     if (event.payload.simulateFailure === 'billing') {
-      await this.publishResult(
-        event,
-        EVENT_TYPES.BILLING_FAILED,
-        { reason: 'Fallo simulado de facturacion' },
-      );
+      await this.publishResult(event, EVENT_TYPES.BILLING_FAILED, {
+        reason: 'Fallo simulado de facturacion',
+      });
       return;
     }
 
     // Si la cuenta ya fue cancelada, no reactivarla.
-    // setOnInsert evita sobrescribir una compensacion.
+    // $setOnInsert evita sobrescribir una compensacion.
     await BillingAccount.updateOne(
       { activationId },
       {
@@ -107,49 +95,34 @@ class BillingService implements OnModuleInit {
       { upsert: true },
     );
 
-    const account = await BillingAccount.findOne({
-      activationId,
-    });
+    const account = await BillingAccount.findOne({ activationId });
 
     if (account?.status === 'CANCELLED') {
-      console.log(
-        `Cuenta ya cancelada: ${activationId}`,
-      );
+      console.log(`Cuenta ya cancelada: ${activationId}`);
       return;
     }
 
-    await this.publishResult(
-      event,
-      EVENT_TYPES.BILLING_ACCOUNT_CREATED,
-      { activationId },
-    );
+    await this.publishResult(event, EVENT_TYPES.BILLING_ACCOUNT_CREATED, {
+      activationId,
+    });
 
-    console.log(
-      `Facturacion procesada: ${activationId}`,
-    );
+    console.log(`Facturacion procesada: ${activationId}`);
   }
 
   // COMPENSAR UNA ACTIVACION FALLIDA
 
-  async compensate(
-    event: EventEnvelope<Record<string, string>>,
-  ) {
-    if (
-      event?.eventType !==
-      EVENT_TYPES.ACTIVATION_FAILED
-    ) {
+  async compensate(event: EventEnvelope<Record<string, string>>) {
+    if (event?.eventType !== EVENT_TYPES.ACTIVATION_FAILED) {
       return;
     }
 
     const activationId = event.correlationId;
 
-    console.log(
-      `Compensando activacion: ${activationId}`,
-    );
+    console.log(`Compensando activacion: ${activationId}`);
 
     // Si la cuenta existe, se cancela.
-    // Si todavia no existe, se registra CANCELLED
-    // para impedir que se active posteriormente.
+    // Si todavia no existe, se registra CANCELLED para evitar
+    // que una solicitud tardia cree una cuenta activa.
     await BillingAccount.updateOne(
       { activationId },
       {
@@ -164,12 +137,9 @@ class BillingService implements OnModuleInit {
       { upsert: true },
     );
 
-    const compensationEvent: EventEnvelope<
-      Record<string, string>
-    > = {
+    const compensationEvent: EventEnvelope<Record<string, string>> = {
       eventId: randomUUID(),
-      eventType:
-        EVENT_TYPES.BILLING_ACCOUNT_CANCELLED,
+      eventType: EVENT_TYPES.BILLING_ACCOUNT_CANCELLED,
       version: 1,
       occurredAt: new Date().toISOString(),
       correlationId: activationId,
@@ -188,12 +158,8 @@ class BillingService implements OnModuleInit {
       }),
     );
 
-    console.log(
-      `Evento publicado: BillingAccountCancelled`,
-    );
-    console.log(
-      `Compensacion finalizada: ${activationId}`,
-    );
+    console.log('Evento publicado: BillingAccountCancelled');
+    console.log(`Compensacion finalizada: ${activationId}`);
   }
 
   // PUBLICAR RESULTADOS EN KAFKA
@@ -203,9 +169,7 @@ class BillingService implements OnModuleInit {
     eventType: string,
     payload: Record<string, string>,
   ) {
-    const result: EventEnvelope<
-      Record<string, string>
-    > = {
+    const result: EventEnvelope<Record<string, string>> = {
       eventId: randomUUID(),
       eventType,
       version: 1,
@@ -225,29 +189,101 @@ class BillingService implements OnModuleInit {
 
     console.log(`Evento publicado: ${eventType}`);
   }
+
+  // ENVIAR MENSAJES A DEAD LETTER QUEUE
+
+  async publishToDlq(
+    event: ActivationRequestedEvent | EventEnvelope<Record<string, string>>,
+    originalTopic: string,
+    dlqTopic: string,
+    error: unknown,
+  ): Promise<void> {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    const dlqMessage = {
+      originalEvent: event,
+      originalTopic,
+      failedAt: new Date().toISOString(),
+      error: errorMessage,
+      failedService: 'billing-service',
+    };
+
+    await firstValueFrom(
+      this.kafka.emit(dlqTopic, {
+        key: event.customerId,
+        value: dlqMessage,
+      }),
+    );
+
+    console.error(
+      `Billing: evento enviado a ${dlqTopic}: ${event.correlationId}`,
+    );
+  }
 }
 
 // CONSUMIDORES KAFKA
 
 @Controller()
 class BillingController {
-  constructor(
-    private readonly service: BillingService,
-  ) {}
+  constructor(private readonly service: BillingService) {}
+
+  // SOLICITUDES DE ACTIVACION
 
   @EventPattern(TOPICS.ACTIVATION_REQUESTED)
-  async handleActivation(
-    @Payload() event: ActivationRequestedEvent,
-  ) {
-    await this.service.processActivation(event);
+  async handleActivation(@Payload() event: ActivationRequestedEvent) {
+    try {
+      await withRetry(() => this.service.processActivation(event), {
+        onRetry: (error, retryNumber, delayMs) => {
+          console.warn(
+            `Billing: reintento ${retryNumber}/3 en ${delayMs} ms`,
+            error,
+          );
+        },
+      });
+    } catch (error) {
+      console.error(
+        `Billing: reintentos agotados procesando ${event?.correlationId}`,
+        error,
+      );
+
+      // Si falla la DLQ, el error se propaga en vez de ocultarlo.
+      await this.service.publishToDlq(
+        event,
+        TOPICS.ACTIVATION_REQUESTED,
+        TOPICS.ACTIVATION_REQUESTED_DLQ,
+        error,
+      );
+    }
   }
+
+  // RESULTADOS FINALES Y COMPENSACION
 
   @EventPattern(TOPICS.ACTIVATION_EVENTS)
   async handleActivationResult(
-    @Payload()
-    event: EventEnvelope<Record<string, string>>,
+    @Payload() event: EventEnvelope<Record<string, string>>,
   ) {
-    await this.service.compensate(event);
+    try {
+      await withRetry(() => this.service.compensate(event), {
+        onRetry: (error, retryNumber, delayMs) => {
+          console.warn(
+            `Billing compensacion: reintento ${retryNumber}/3 en ${delayMs} ms`,
+            error,
+          );
+        },
+      });
+    } catch (error) {
+      console.error(
+        `Billing: reintentos agotados compensando ${event?.correlationId}`,
+        error,
+      );
+
+      await this.service.publishToDlq(
+        event,
+        TOPICS.ACTIVATION_EVENTS,
+        TOPICS.ACTIVATION_EVENTS_DLQ,
+        error,
+      );
+    }
   }
 }
 
@@ -262,10 +298,7 @@ class BillingController {
         options: {
           client: {
             clientId: 'billing-producer',
-            brokers: [
-              process.env.KAFKA_BROKERS ||
-                'kafka:19092',
-            ],
+            brokers: [process.env.KAFKA_BROKERS || 'kafka:19092'],
           },
           consumer: {
             groupId: 'billing-producer',
@@ -291,39 +324,28 @@ async function bootstrap() {
 
   console.log('Billing conectado a MongoDB');
 
-  const app =
-    await NestFactory.createMicroservice<
-      MicroserviceOptions
-    >(
-      BillingModule,
-      {
-        transport: Transport.KAFKA,
-        options: {
-          client: {
-            clientId: 'billing-consumer',
-            brokers: [
-              process.env.KAFKA_BROKERS ||
-                'kafka:19092',
-            ],
-          },
-          consumer: {
-            groupId: 'billing-svc',
-          },
+  const app = await NestFactory.createMicroservice<MicroserviceOptions>(
+    BillingModule,
+    {
+      transport: Transport.KAFKA,
+      options: {
+        client: {
+          clientId: 'billing-consumer',
+          brokers: [process.env.KAFKA_BROKERS || 'kafka:19092'],
+        },
+        consumer: {
+          groupId: 'billing-svc',
         },
       },
-    );
+    },
+  );
 
   await app.listen();
 
-  console.log(
-    'Billing-service escuchando Kafka',
-  );
+  console.log('Billing-service escuchando Kafka');
 }
 
 bootstrap().catch((error) => {
-  console.error(
-    'Error iniciando billing-service:',
-    error,
-  );
+  console.error('Error iniciando billing-service:', error);
   process.exit(1);
 });
